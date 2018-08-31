@@ -1,6 +1,6 @@
 
+import { DocumentReference, DocumentSnapshot, Firestore } from '@google-cloud/firestore';
 import * as debug from 'debug';
-import * as admin from 'firebase-admin';
 import { v4 } from 'uuid';
 import { Schema } from './handlers/types';
 import { Model, ModelOrPromise, ModelPromise } from './model';
@@ -34,7 +34,7 @@ export class Store {
 
 
     public basePath: string = '';
-    public database: admin.database.Database;
+    public database: Firestore;
 
     /**
      * A pathPrefix links a 'group' key to a path in the DB. eg 'team' : '/team/123456'
@@ -57,7 +57,7 @@ export class Store {
      * @param options an object containing, optionally, basePath and useUUID
      */
 
-    constructor(database: admin.database.Database, options: { basePath?: string, useUUID?: number } | null = null) {
+    constructor(database: Firestore, options: { basePath?: string, useUUID?: number } | null = null) {
         this.database = database;
         if (options !== null) {
             if (options.basePath !== undefined) {
@@ -193,24 +193,18 @@ export class Store {
      */
 
     public async _linkToFirebase(record: Model): Promise<{}> {
-
-        // If the record is already has an active reference then stop listening to further updates
-        if (record._ref !== undefined && record._ref !== null) {
-            record._ref.off();
-        }
-
         const path: string = record._path;
         log(`looking for record at path ${path}`);
-        const ref: admin.database.Reference = this.database.ref(path);
+        const ref: DocumentReference = this.database.doc(path);
         record._ref = ref;
         // tslint:disable-next-line:typedef
         return new Promise((resolve, reject) => {
-            ref.on('value', (dataSnapshot: admin.database.DataSnapshot) => {
+            ref.get().then((documentSnapshot: DocumentSnapshot) => {
 
                 log(`got data for ${record.id}`);
 
                 // tslint:disable-next-line:no-any
-                const result: any = dataSnapshot.val();
+                const result: any = documentSnapshot.data();
                 if (this._activeRecords[record.modelName] !== undefined && this._activeRecords[record.modelName][record.id] !== undefined) {
 
                     if (result !== null) {
@@ -220,7 +214,7 @@ export class Store {
                             log('received null data for deleted record, ignore it');
                             resolve();
                         } else {
-                            const notFoundError = new Error(`record not found for key ${ref.key}`);
+                            const notFoundError = new Error(`record not found for key ${ref.id}`);
                             notFoundError.name = 'NinjaFireRecordNotFound';
                             reject(notFoundError);
                         }
@@ -272,7 +266,6 @@ export class Store {
      */
 
     public unloadRecord(record: Model): void {
-        record._willUnload();
         delete this._activeRecords[record.modelName][record.id];
     }
 
@@ -281,7 +274,7 @@ export class Store {
         log('performing firebase updates');
         log(updates);
         try {
-            await this.database.ref('/').update(updates);
+            await this.database.doc('/').update(updates);
         } catch (error) {
             console.error(`Failed to save updates: ${JSON.stringify(updates)} ${error} ${error.stack}`);
             throw error;

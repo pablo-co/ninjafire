@@ -4,6 +4,8 @@ import * as admin from 'firebase-admin';
 import { v1, v4 } from 'uuid';
 import { HandlerOptions, HandlerTypes, isAttrHandlerOptions, isBelongsToHandlerOptions, isHasManyHandlerOptions, Schema, throwBadHandler } from './handlers';
 import { Store } from './store';
+import DocumentReference = admin.firestore.DocumentReference;
+import DocumentData = FirebaseFirestore.DocumentData;
 
 const log: debug.IDebugger = debug('ninjafire:model');
 
@@ -15,7 +17,7 @@ export interface ModelPromise<T> extends Promise<T> {
     id: string;
     isLoading: boolean;
     _path?: string;
-    _ref?: admin.database.Reference;
+    _ref?: DocumentReference;
 }
 
 export type ModelOrPromise<T extends Model> = T | ModelPromise<T>;
@@ -102,7 +104,7 @@ export abstract class Model {
         return path;
     }
 
-    public _ref: admin.database.Reference | null = null;
+    public _ref: DocumentReference | null = null;
 
     public _remoteAttributes: object = {}; // The state of the object in Firebase (as last seen)
     public _localAttributes: object = {}; // Any local attribute changes that have not yet been submitted
@@ -138,8 +140,8 @@ export abstract class Model {
                 // Use the firebase generated key. See: https://firebase.google.com/docs/reference/js/firebase.database.Reference#push
                 const path: string = this._path;
                 log(`looking for record at path ${path}`);
-                this._ref = this.store.database.ref(path).push();
-                this.id = this._ref.key as string;
+                this._ref = this.store.database.doc(path);
+                this.id = this._ref.id as string;
             }
         }
     }
@@ -256,7 +258,6 @@ export abstract class Model {
 
             const allAttributes: object = {};
             Object.assign(allAttributes, this._remoteAttributes, this._localAttributes);
-            
             // Map through active keys in the schema
             Object.keys(allAttributes).filter((key: string) => this.schema[key] !== undefined).map((key: string) => {
 
@@ -506,13 +507,6 @@ export abstract class Model {
         });
     }
 
-    public _willUnload(): void {
-        if (this._ref !== undefined && this._ref !== null) {
-            log(`removing ref for ${this.id}`);
-            this._ref.off();
-            this._ref = null;
-        }
-    }
     /**
      * Creates a new firebase ref and retrieves the current value
      * Mostly used by the tests
@@ -521,9 +515,14 @@ export abstract class Model {
 
     // tslint:disable-next-line:no-any
     public async rawFirebaseValue(attribute: string): Promise<any> {
-        const snapshot = await this.store.database.ref(this._path).once('value');
-        const val = snapshot.val();
-        return val[attribute];
+        const snapshot = await this.store.database.doc(this._path).get();
+        if (snapshot.exists) {
+            const val: DocumentData | undefined = snapshot.data();
+            if (val !== undefined && val.hasOwnProperty(attribute)) {
+              return val[attribute];
+            }
+        }
+        return null;
     }
 
     /**
